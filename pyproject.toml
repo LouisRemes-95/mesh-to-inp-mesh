@@ -1,0 +1,15 @@
+[project]
+name = "mesh-to-inp-mesh"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "meshio>=5.3.5",
+    "rich>=14.3.3",
+]
+
+[project.scripts]
+mesh-to-inp-mesh = "mesh_to_inp_mesh.cli:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
