@@ -21,17 +21,37 @@ def convert(in_path, out_path: Path) -> None:
     if key is not None:
 
         region_lut: dict[int, np.array] = {}
-        out_tetras = np.empty((0,4), dtype = np.int64)
-        out_points = np.empty((0,3), dtype = np.float64)
+        points_chunks = []
+        tetras_chunks = []
+        offset = 0
         for region_id in set(mesh.cell_data_dict[key]['tetra']):
             region_tetras = mesh.cells_dict['tetra'][mesh.cell_data_dict[key]['tetra'] == region_id,:]
             region_points = np.unique(region_tetras.ravel())
 
-            region_lut[region_id] = np.full(mesh.points.shape[0], 0, dtype=smallest_uint_dtype(region_points.size + out_points.shape[0] - 1))
-            region_lut[region_id][region_points] = np.arange(region_points.size) + out_points.shape[0]
+            region_lut[region_id] = np.full(mesh.points.shape[0], 0, dtype=smallest_uint_dtype(region_points.size + offset - 1))
+            region_lut[region_id][region_points] = np.arange(region_points.size) + offset
 
-            out_points = np.vstack([out_points, mesh.points[region_points, :]])
-            out_tetras = np.vstack([out_tetras, region_lut[region_id][region_tetras].astype(np.int64)])
+            points_chunks.append(mesh.points[region_points, :])
+            tetras_chunks.append(region_lut[region_id][region_tetras].astype(np.int64))
+            offset += region_points.size
+
+        out_points = np.vstack(points_chunks)
+        out_tetras = np.vstack(tetras_chunks)
+
+        tris = mesh.cells_dict['tetra'][:, [[0,2,1],[0,1,3],[1,2,3],[0,3,2]]].reshape(-1,3)
+        tris_region = np.hstack([tris, np.repeat(mesh.cell_data_dict[key]['tetra'][:,None], 4, axis = 1).reshape(-1,1)])
+        sorted_tris_region = tris_region.copy()
+        sorted_tris_region[:, :3].sort(axis = 1)
+
+        _, inverse, count = np.unique(sorted_tris_region, axis=0, return_inverse=True, return_count=True)
+        tris_region = tris_region[count[inverse] == 1, :]
+        sorted_tris_region = sorted_tris_region[count[inverse] == 1, :]
+
+        _, inverse, count = np.unique(sorted_tris_region[:, :3], axis=0, return_inverse=True, return_count=True)
+        tris_regions = np.hstack([tris_region, tris_region[:, -1:]])
+
+        pass
+
     else:
         out_points, out_tris = surface_from_mesh(mesh.points, mesh.cells_dict['tetra'])
 
