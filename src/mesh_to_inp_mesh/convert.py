@@ -2,7 +2,7 @@ from pathlib import Path
 import meshio
 import numpy as np
 
-def convert(in_path, out_path: Path, data_label: str = None) -> None:
+def convert(in_path, out_path: Path) -> None:
     """ 
     Convert a meshio mesh file (used for .mesh) to .ply
     Intended for a tetrahedral mesh with cell data representing region index
@@ -20,13 +20,18 @@ def convert(in_path, out_path: Path, data_label: str = None) -> None:
     key = next(iter(mesh.cell_data), None)
     if key is not None:
 
+        region_lut: dict[int, np.array] = {}
+        out_tetras = np.empty((0,4), dtype = np.int64)
         out_points = np.empty((0,3), dtype = np.float64)
-        out_tris = np.empty((0,3), dtype = np.int64)
         for region_id in set(mesh.cell_data_dict[key]['tetra']):
-            surface_points, surface_faces = surface_from_mesh(mesh.points, mesh.cells_dict['tetra'][mesh.cell_data_dict[key]['tetra'] == region_id,:])
+            region_tetras = mesh.cells_dict['tetra'][mesh.cell_data_dict[key]['tetra'] == region_id,:]
+            region_points = np.unique(region_tetras.ravel())
 
-            out_tris = np.vstack([out_tris, surface_faces + out_points.shape[0]])
-            out_points = np.vstack([out_points, surface_points])
+            region_lut[region_id] = np.full(mesh.points.shape[0], 0, dtype=smallest_uint_dtype(region_points.size + out_points.shape[0] - 1))
+            region_lut[region_id][region_points] = np.arange(region_points.size) + out_points.shape[0]
+
+            out_points = np.vstack([out_points, mesh.points[region_points, :]])
+            out_tetras = np.vstack([out_tetras, region_lut[region_id][region_tetras].astype(np.int64)])
     else:
         out_points, out_tris = surface_from_mesh(mesh.points, mesh.cells_dict['tetra'])
 
@@ -55,3 +60,9 @@ def surface_from_mesh(points, tets: np.ndarray) -> tuple[np.ndarray, np.ndarray]
     lut[surface_point_id] = np.arange(surface_point_id.size)
 
     return points[surface_point_id, :], lut[boundary_tris]
+
+def smallest_uint_dtype(max_value: int):
+    for dtype in (np.uint8, np.uint16, np.uint32, np.uint64):
+        if max_value <= np.iinfo(dtype).max:
+            return dtype
+    raise ValueError("Value too large")
