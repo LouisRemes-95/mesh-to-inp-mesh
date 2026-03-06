@@ -1,57 +1,148 @@
 from pathlib import Path
+
 import meshio
 import numpy as np
 
-def convert(in_path, out_path: Path, data_label: str = None) -> None:
-    """ 
-    Convert a meshio mesh file (used for .mesh) to .ply
-    Intended for a tetrahedral mesh with cell data representing region index
-    
-    Inputs
-    ------
-    in_path:
-        Input mesh path
-    out_path:
-        Output .ply path
+
+def convert(in_path, out_path: Path) -> None:
+    """
+    Convert a meshio mesh file to Abaqus and insert cohesive elements
+    between tetrahedral regions.
+
+    Inputs 
+    ------ 
+    in_path: 
+        Input mesh path 
+    out_path: 
+        Output .inp path
     """
 
     mesh = meshio.read(in_path)
-    
+
     key = next(iter(mesh.cell_data), None)
-    if key is not None:
+    if key is None:
+        meshio.write(out_path, mesh, file_format="abaqus")
+        return
 
-        out_points = np.empty((0,3), dtype = np.float64)
-        out_tris = np.empty((0,3), dtype = np.int64)
-        for region_id in set(mesh.cell_data_dict[key]['tetra']):
-            surface_points, surface_faces = surface_from_mesh(mesh.points, mesh.cells_dict['tetra'][mesh.cell_data_dict[key]['tetra'] == region_id,:])
+    out_points, out_tetras, region_lut = _build_region_separated_mesh(mesh, key)
+    tris_regions = _extract_interface_triangles(mesh, key)
 
-            out_tris = np.vstack([out_tris, surface_faces + out_points.shape[0]])
-            out_points = np.vstack([out_points, surface_points])
-    else:
-        out_points, out_tris = surface_from_mesh(mesh.points, mesh.cells_dict['tetra'])
+    cohesive_mesh = meshio.Mesh(
+        points=out_points,
+        cells=[("tetra", out_tetras)],
+    )
+    meshio.write(out_path, cohesive_mesh, file_format="abaqus")
 
-    if out_tris.max() > np.iinfo(np.int32).max:
-        raise OverflowError("PLY cannot store indices > int32")
+    lines = _read_lines(out_path)
+    lines = _rewrite_abaqus_lines(lines)
 
-    out_tris = out_tris.astype(np.int32)
+    start_elem_id = _find_next_element_id(lines)
+    lines.extend(_make_cohesive_element_lines(tris_regions, region_lut, start_elem_id))
 
-    surface_mesh = meshio.Mesh(
-        points = out_points,
-        cells=[("triangle", out_tris)]
-        )
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
-    meshio.write(out_path, surface_mesh, file_format="ply")
 
-def surface_from_mesh(points, tets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    tris = tets[:, [[0,1,2],[0,3,1],[1,3,2],[0,2,3]]].reshape(-1,3)
+def _build_region_separated_mesh(mesh: meshio.Mesh, key: str):
+    tetra_cells = mesh.cells_dict["tetra"]
+    tetra_regions = mesh.cell_data_dict[key]["tetra"]
 
-    _, inverse, counts = np.unique(np.sort(tris), axis = 0, return_inverse = True, return_counts = True)
-    is_boundary_face = counts[inverse] == 1
-    boundary_tris = tris[is_boundary_face, :]
+    region_lut: dict[int, np.ndarray] = {}
+    points_chunks = []
+    tetras_chunks = []
+    offset = 0
 
-    surface_point_id = np.unique(boundary_tris.flatten())
+    for region_id in np.unique(tetra_regions):
+        region_mask = tetra_regions == region_id
+        region_tetras = tetra_cells[region_mask, :]
+        region_points = np.unique(region_tetras.ravel())
 
-    lut = np.full(surface_point_id.max()+1, -1, dtype=np.int64)
-    lut[surface_point_id] = np.arange(surface_point_id.size)
+        lut = np.full(mesh.points.shape[0], 0, dtype=_smallest_uint_dtype(region_points.size + offset - 1))
+        lut[region_points] = np.arange(region_points.size) + offset
+        region_lut[int(region_id)] = lut
 
-    return points[surface_point_id, :], lut[boundary_tris]
+        points_chunks.append(mesh.points[region_points, :])
+        tetras_chunks.append(lut[region_tetras].astype(np.int64))
+
+        offset += region_points.size
+
+    out_points = np.vstack(points_chunks)
+    out_tetras = np.vstack(tetras_chunks)
+    return out_points, out_tetras, region_lut
+
+
+def _extract_interface_triangles(mesh: meshio.Mesh, key: str) -> np.ndarray:
+    tetra_cells = mesh.cells_dict["tetra"]
+    tetra_regions = mesh.cell_data_dict[key]["tetra"]
+
+    tris = tetra_cells[:, [[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]].reshape(-1, 3)
+    regions = np.repeat(tetra_regions, 4)[:, None]
+    sorted_tris_region = np.hstack([np.sort(tris, axis=1), regions])
+
+    _, inverse, counts = np.unique(sorted_tris_region, axis=0, return_inverse=True, return_counts=True)
+    is_boundary = counts[inverse] == 1
+    tris = tris[is_boundary, :]
+    sorted_tris_region = sorted_tris_region[is_boundary, :]
+
+    _, index, inverse = np.unique(sorted_tris_region[:, :3], axis=0, return_index=True, return_inverse=True)
+    tris_regions = np.hstack([tris, sorted_tris_region[:, 3:], sorted_tris_region[index[inverse], 3:]])
+    keep = np.ones(len(tris_regions), dtype=bool)
+    keep[index] = False
+    return tris_regions[keep]
+
+
+def _read_lines(path: Path) -> list[str]:
+    with open(path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f]
+
+
+def _rewrite_abaqus_lines(lines: list[str]) -> list[str]:
+    header = []
+    body = []
+    in_header = False
+
+    for stripped in lines:
+        if stripped.startswith("*HEADING"):
+            in_header = True
+            header.append(stripped)
+            continue
+
+        if stripped.startswith("*") and in_header:
+            in_header = False
+
+        if in_header:
+            header.append(stripped)
+            continue
+
+        if stripped == "*ELEMENT, TYPE=C3D4":
+            stripped = "*ELEMENT, TYPE=C3D4, ELSET=TETRA"
+
+        body.append(stripped)
+
+    if not header:
+        return body
+
+    return [header[0], " ".join(header[1:]), "Automatic python generated cohesive elements", *body]
+
+
+def _find_next_element_id(lines: list[str]) -> int:
+    for line in reversed(lines):
+        if line and not line.startswith("*"):
+            return int(line.split(",")[0]) + 1
+    raise ValueError("Could not find any element definition line.")
+
+
+def _make_cohesive_element_lines( tris_regions: np.ndarray, region_lut: dict[int, np.ndarray], start_elem_id: int) -> list[str]:
+    lines = ["*ELEMENT, TYPE=COH3D6, ELSET=COHESIVE"]
+
+    for i, cohe_elem in enumerate(tris_regions):
+        lines.append(",".join(map(str, np.concatenate(([start_elem_id + i], region_lut[cohe_elem[3]][cohe_elem[:3]], region_lut[cohe_elem[4]][cohe_elem[:3]])))))
+
+    return lines
+
+
+def _smallest_uint_dtype(max_value: int):
+    for dtype in (np.uint8, np.uint16, np.uint32, np.uint64):
+        if max_value <= np.iinfo(dtype).max:
+            return dtype
+    raise ValueError("Value too large")
