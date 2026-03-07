@@ -39,7 +39,8 @@ def convert(in_path, out_path: Path) -> None:
         out_tetras = np.vstack(tetras_chunks)
 
         tris = mesh.cells_dict['tetra'][:, [[0,2,1],[0,1,3],[1,2,3],[0,3,2]]].reshape(-1,3)
-        sorted_tris_region = np.hstack([tris.copy().sort(axis = 1), np.repeat(mesh.cell_data_dict[key]['tetra'][:,None], 4, axis = 1).reshape(-1,1)])
+        regions = np.repeat(mesh.cell_data_dict[key]['tetra'], 4)[:, None]
+        sorted_tris_region = np.hstack([np.sort(tris, axis = 1), regions])
 
         _, inverse, counts = np.unique(sorted_tris_region, axis=0, return_inverse=True, return_counts=True)
         is_boundary = counts[inverse] == 1
@@ -47,8 +48,10 @@ def convert(in_path, out_path: Path) -> None:
         sorted_tris_region = sorted_tris_region[is_boundary, :]
 
         _, index, inverse, counts = np.unique(sorted_tris_region[:, :3], axis=0, return_index=True, return_inverse=True, return_counts=True)
-        tris_regions = np.hstack([tris, sorted_tris_region[index[inverse],3], sorted_tris_region[:,3]])
-        tris_regions = np.delete(tris_regions, index, axis=0)
+        tris_regions = np.hstack([tris, sorted_tris_region[:, 3:], sorted_tris_region[index[inverse], 3:]])
+        keep = np.ones(len(tris_regions), dtype=bool)
+        keep[index] = False
+        tris_regions = tris_regions[keep]
 
         pass
 
