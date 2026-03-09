@@ -35,12 +35,11 @@ def convert(in_path, out_path: Path) -> None:
     meshio.write(out_path, cohesive_mesh, file_format="abaqus")
 
     def test(row):
-        return region_lut[int(row[4])][row[:3]]
+        return region_lut[int(row[4])][row[:3]].astype(np.int64)
     
-    id = 6
     surface_mesh = meshio.Mesh(
-        points = mesh.points,
-        cells=[("triangle", tris_regions[(tris_regions[:,3] == id) | (tris_regions[:,4] == id),:3])]
+        points = out_points,
+        cells=[("triangle", np.apply_along_axis(test, axis=1, arr=tris_regions))]
         )
     
     meshio.write(out_path.with_suffix(".ply"), surface_mesh, file_format="ply")
@@ -87,6 +86,10 @@ def _extract_interface_triangles(mesh: meshio.Mesh, key: str) -> np.ndarray:
     tris = mesh.cells_dict["tetra"][:, [[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]].reshape(-1, 3)
     regions = np.repeat(mesh.cell_data_dict[key]["tetra"], 4)[:, None]
     sorted_tris_region = np.hstack([np.sort(tris, axis=1), regions])
+
+    order_by_region = np.argsort(sorted_tris_region[:, -1])
+    tris = tris[order_by_region, :]
+    sorted_tris_region = sorted_tris_region[order_by_region, :]
 
     _, inverse, counts = np.unique(sorted_tris_region, axis=0, return_inverse=True, return_counts=True)
     is_boundary = counts[inverse] == 1
