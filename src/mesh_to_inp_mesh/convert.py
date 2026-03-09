@@ -70,7 +70,7 @@ def _build_region_separated_mesh(mesh: meshio.Mesh, key: str):
 
         lut = np.full(mesh.points.shape[0], 0, dtype=_smallest_uint_dtype(region_points.size + offset - 1))
         lut[region_points] = np.arange(region_points.size) + offset
-        region_lut[region_id] = lut
+        region_lut[int(region_id)] = lut
 
         points_chunks.append(mesh.points[region_points, :])
         tetras_chunks.append(lut[region_tetras].astype(np.int64))
@@ -148,7 +148,7 @@ def _make_cohesive_element_lines( tris_regions: np.ndarray, region_lut: dict[int
     lines = ["*ELEMENT, TYPE=COH3D6, ELSET=COHESIVE"]
 
     for i, cohe_elem in enumerate(tris_regions):
-        lines.append(",".join(map(str, np.concatenate(([start_elem_id + i], region_lut[cohe_elem[3]][cohe_elem[:3]].astype(np.int64), region_lut[cohe_elem[4]][cohe_elem[:3]].astype(np.int64))))))
+        lines.append(",".join(map(str, np.concatenate(([start_elem_id + i], region_lut[(cohe_elem[3])][cohe_elem[:3]].astype(np.int64), region_lut[(cohe_elem[4])][cohe_elem[:3]].astype(np.int64))))))
 
     return lines
 
