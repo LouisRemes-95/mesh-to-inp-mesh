@@ -31,7 +31,19 @@ def convert(in_path, out_path: Path) -> None:
         points=out_points,
         cells=[("tetra", out_tetras)],
     )
+
     meshio.write(out_path, cohesive_mesh, file_format="abaqus")
+
+    def test(row):
+        return region_lut[int(row[4])][row[:3]]
+    
+    id = 6
+    surface_mesh = meshio.Mesh(
+        points = mesh.points,
+        cells=[("triangle", tris_regions[(tris_regions[:,3] == id) | (tris_regions[:,4] == id),:3])]
+        )
+    
+    meshio.write(out_path.with_suffix(".ply"), surface_mesh, file_format="ply")
 
     lines = _read_lines(out_path)
     lines = _rewrite_abaqus_lines(lines)
@@ -59,7 +71,7 @@ def _build_region_separated_mesh(mesh: meshio.Mesh, key: str):
 
         lut = np.full(mesh.points.shape[0], 0, dtype=_smallest_uint_dtype(region_points.size + offset - 1))
         lut[region_points] = np.arange(region_points.size) + offset
-        region_lut[int(region_id)] = lut
+        region_lut[region_id] = lut
 
         points_chunks.append(mesh.points[region_points, :])
         tetras_chunks.append(lut[region_tetras].astype(np.int64))
@@ -72,11 +84,8 @@ def _build_region_separated_mesh(mesh: meshio.Mesh, key: str):
 
 
 def _extract_interface_triangles(mesh: meshio.Mesh, key: str) -> np.ndarray:
-    tetra_cells = mesh.cells_dict["tetra"]
-    tetra_regions = mesh.cell_data_dict[key]["tetra"]
-
-    tris = tetra_cells[:, [[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]].reshape(-1, 3)
-    regions = np.repeat(tetra_regions, 4)[:, None]
+    tris = mesh.cells_dict["tetra"][:, [[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]].reshape(-1, 3)
+    regions = np.repeat(mesh.cell_data_dict[key]["tetra"], 4)[:, None]
     sorted_tris_region = np.hstack([np.sort(tris, axis=1), regions])
 
     _, inverse, counts = np.unique(sorted_tris_region, axis=0, return_inverse=True, return_counts=True)
@@ -136,7 +145,7 @@ def _make_cohesive_element_lines( tris_regions: np.ndarray, region_lut: dict[int
     lines = ["*ELEMENT, TYPE=COH3D6, ELSET=COHESIVE"]
 
     for i, cohe_elem in enumerate(tris_regions):
-        lines.append(",".join(map(str, np.concatenate(([start_elem_id + i], region_lut[cohe_elem[3]][cohe_elem[:3]], region_lut[cohe_elem[4]][cohe_elem[:3]])))))
+        lines.append(",".join(map(str, np.concatenate(([start_elem_id + i], region_lut[cohe_elem[3]][cohe_elem[:3]].astype(np.int64), region_lut[cohe_elem[4]][cohe_elem[:3]].astype(np.int64))))))
 
     return lines
 
