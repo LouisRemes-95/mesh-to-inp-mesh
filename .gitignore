@@ -12,3 +12,4 @@ wheels/
 # Test files
 *.mesh
 *.inp
+*.ply
