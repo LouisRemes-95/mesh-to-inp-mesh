@@ -6,7 +6,7 @@ import numpy as np
 
 def convert(in_path, out_path: Path) -> None:
     """
-    Convert a meshio mesh file to Abaqus and insert cohesive elements
+    Convert a meshio mesh file to Abaqus part and insert cohesive elements
     between tetrahedral regions.
 
     Inputs 
@@ -34,28 +34,15 @@ def convert(in_path, out_path: Path) -> None:
 
     meshio.write(out_path, cohesive_mesh, file_format="abaqus")
 
-    tris = []
-    for i, row in enumerate(np.repeat(tris_regions, 2, axis = 0)):
-        tris.append(region_lut[(row[3+i%2])][row[:3]].astype(np.int64))
-
-    tris = np.vstack(tris)
-    
-    surface_mesh = meshio.Mesh(
-        points = out_points,
-        cells=[("triangle", tris)]
-        )
-    
-    meshio.write(out_path.with_suffix(".ply"), surface_mesh, file_format="ply")
-
     lines = _read_lines(out_path)
     lines = _rewrite_abaqus_lines(lines)
 
     start_elem_id = _find_next_element_id(lines)
     lines.extend(_make_cohesive_element_lines(tris_regions, region_lut, start_elem_id))
+    lines.extend(["*END PART"])
 
-    with open(out_path, "w", encoding="ascii") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-
 
 def _build_region_separated_mesh(mesh: meshio.Mesh, key: str):
     tetra_cells = mesh.cells_dict["tetra"]
@@ -84,7 +71,6 @@ def _build_region_separated_mesh(mesh: meshio.Mesh, key: str):
     out_tetras = np.vstack(tetras_chunks)
     return out_points, out_tetras, region_lut
 
-
 def _extract_interface_triangles(mesh: meshio.Mesh, key: str) -> np.ndarray:
     tris = mesh.cells_dict["tetra"][:, [[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]].reshape(-1, 3)
     regions = np.repeat(mesh.cell_data_dict[key]["tetra"], 4)[:, None]
@@ -105,11 +91,9 @@ def _extract_interface_triangles(mesh: meshio.Mesh, key: str) -> np.ndarray:
     keep[index] = False
     return tris_regions[keep]
 
-
 def _read_lines(path: Path) -> list[str]:
-    with open(path, "r", encoding="ascii") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return [line.strip() for line in f]
-
 
 def _rewrite_abaqus_lines(lines: list[str]) -> list[str]:
     header = []
@@ -124,6 +108,7 @@ def _rewrite_abaqus_lines(lines: list[str]) -> list[str]:
 
         if stripped.startswith("*") and in_header:
             in_header = False
+            body.append("*PART, NAME=PART")
 
         if in_header:
             header.append(stripped)
@@ -139,13 +124,11 @@ def _rewrite_abaqus_lines(lines: list[str]) -> list[str]:
 
     return [header[0], " ".join(header[1:]), "Automatic python generated cohesive elements", *body]
 
-
 def _find_next_element_id(lines: list[str]) -> int:
     for line in reversed(lines):
         if line and not line.startswith("*"):
             return int(line.split(",")[0]) + 1
     raise ValueError("Could not find any element definition line.")
-
 
 def _make_cohesive_element_lines( tris_regions: np.ndarray, region_lut: dict[int, np.ndarray], start_elem_id: int) -> list[str]:
     lines = ["*ELEMENT, TYPE=COH3D6, ELSET=COHESIVE"]
@@ -154,7 +137,6 @@ def _make_cohesive_element_lines( tris_regions: np.ndarray, region_lut: dict[int
         lines.append(",".join(map(str, np.concatenate(([start_elem_id + i], region_lut[(cohe_elem[3])][cohe_elem[:3]].astype(np.int64)+1, region_lut[(cohe_elem[4])][cohe_elem[:3]].astype(np.int64)+1)))))
 
     return lines
-
 
 def _smallest_uint_dtype(max_value: int):
     for dtype in (np.uint8, np.uint16, np.uint32, np.uint64):
