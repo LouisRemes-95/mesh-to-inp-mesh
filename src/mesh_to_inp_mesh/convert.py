@@ -6,7 +6,7 @@ import numpy as np
 
 def convert(in_path, out_path: Path) -> None:
     """
-    Convert a meshio mesh file to Abaqus and insert cohesive elements
+    Convert a meshio mesh file to Abaqus part and insert cohesive elements
     between tetrahedral regions.
 
     Inputs 
@@ -52,6 +52,7 @@ def convert(in_path, out_path: Path) -> None:
 
     start_elem_id = _find_next_element_id(lines)
     lines.extend(_make_cohesive_element_lines(tris_regions, region_lut, start_elem_id))
+    lines.extend(["*END PART"])
 
     with open(out_path, "w", encoding="ascii") as f:
         f.write("\n".join(lines))
@@ -124,6 +125,7 @@ def _rewrite_abaqus_lines(lines: list[str]) -> list[str]:
 
         if stripped.startswith("*") and in_header:
             in_header = False
+            body.append("*PART, NAME=PART")
 
         if in_header:
             header.append(stripped)
