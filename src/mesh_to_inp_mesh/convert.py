@@ -34,12 +34,15 @@ def convert(in_path, out_path: Path) -> None:
 
     meshio.write(out_path, cohesive_mesh, file_format="abaqus")
 
-    def test(row):
-        return region_lut[int(row[4])][row[:3]].astype(np.int64)
+    tris = []
+    for i, row in enumerate(np.repeat(tris_regions, 2, axis = 0)):
+        tris.append(region_lut[(row[3+i%2])][row[:3]].astype(np.int64))
+
+    tris = np.vstack(tris)
     
     surface_mesh = meshio.Mesh(
         points = out_points,
-        cells=[("triangle", np.apply_along_axis(test, axis=1, arr=tris_regions))]
+        cells=[("triangle", tris)]
         )
     
     meshio.write(out_path.with_suffix(".ply"), surface_mesh, file_format="ply")
@@ -50,7 +53,7 @@ def convert(in_path, out_path: Path) -> None:
     start_elem_id = _find_next_element_id(lines)
     lines.extend(_make_cohesive_element_lines(tris_regions, region_lut, start_elem_id))
 
-    with open(out_path, "w", encoding="utf-8") as f:
+    with open(out_path, "w", encoding="ascii") as f:
         f.write("\n".join(lines))
 
 
@@ -104,7 +107,7 @@ def _extract_interface_triangles(mesh: meshio.Mesh, key: str) -> np.ndarray:
 
 
 def _read_lines(path: Path) -> list[str]:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="ascii") as f:
         return [line.strip() for line in f]
 
 
@@ -148,7 +151,7 @@ def _make_cohesive_element_lines( tris_regions: np.ndarray, region_lut: dict[int
     lines = ["*ELEMENT, TYPE=COH3D6, ELSET=COHESIVE"]
 
     for i, cohe_elem in enumerate(tris_regions):
-        lines.append(",".join(map(str, np.concatenate(([start_elem_id + i], region_lut[(cohe_elem[3])][cohe_elem[:3]].astype(np.int64), region_lut[(cohe_elem[4])][cohe_elem[:3]].astype(np.int64))))))
+        lines.append(",".join(map(str, np.concatenate(([start_elem_id + i], region_lut[(cohe_elem[3])][cohe_elem[:3]].astype(np.int64)+1, region_lut[(cohe_elem[4])][cohe_elem[:3]].astype(np.int64)+1)))))
 
     return lines
 
