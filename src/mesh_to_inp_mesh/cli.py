@@ -34,7 +34,12 @@ def main():
         convert(args.input_path, out_path)
 
     console.print(f"[green]✔ Converting to .inp complete[/green]")
-    console.print(f"Wrote: {out_path.relative_to(Path.cwd())}")
+    
+    try:
+        rel = out_path.relative_to(Path.cwd())
+    except ValueError:
+        rel = out_path  # fallback to absolute path
+    console.print(f"Wrote: {rel}")
 
 if __name__ == "__main__":
     main()
